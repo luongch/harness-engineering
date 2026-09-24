@@ -24,12 +24,12 @@ export const tools = {
     inputSchema: z.object({
       query: z.string().describe("what to look up"),
     }),
-    execute: async ({ query }) => {
-      const hits = Object.entries(KNOWLEDGE_BASE)
-        .filter(([key]) => query.toLowerCase().includes(key))
-        .map(([, article]) => article);
-      return { articles: hits.length ? hits : ["No exact match — use your judgment."] };
-    },
+    // execute: async ({ query }) => {
+    //   const hits = Object.entries(KNOWLEDGE_BASE)
+    //     .filter(([key]) => query.toLowerCase().includes(key))
+    //     .map(([, article]) => article);
+    //   return { articles: hits.length ? hits : ["No exact match — use your judgment."] };
+    // },
   }),
 
   classifyItem: tool({
@@ -38,7 +38,7 @@ export const tools = {
       itemId: z.string(),
       category: z.enum(["billing", "technical", "sales", "other"]),
     }),
-    execute: async ({ itemId, category }) => ({ ok: true, itemId, category }),
+    // execute: async ({ itemId, category }) => ({ ok: true, itemId, category }),
   }),
 
   draftReply: tool({
@@ -47,7 +47,7 @@ export const tools = {
       itemId: z.string(),
       message: z.string(),
     }),
-    execute: async ({ itemId }) => ({ ok: true, draftId: `draft-${itemId}` }),
+    // execute: async ({ itemId }) => ({ ok: true, draftId: `draft-${itemId}` }),
   }),
 
   sendReply: tool({
@@ -57,6 +57,45 @@ export const tools = {
       draftId: z.string(),
     }),
     // DANGEROUS: an irreversible side effect with zero confirmation.
-    execute: async ({ itemId, draftId }) => ({ sent: true, itemId, draftId }),
+    // execute: async ({ itemId, draftId }) => ({ sent: true, itemId, draftId }),
   }),
+
 };
+
+//make a run tools function that picks the right tool and then put it into
+// a step, this makes it durable
+//Takes in tool requests and runs it
+export async function runTool(
+  name: string, //tool you want to run
+  args: Record<string, unknown>, //key is string and we don't know what the value is
+
+): Promise<Record<string, unknown>> {
+  //this is where we do the execute functions instead of having it in the tool itself
+  switch (name) {
+    case "searchKnowledgeBase": {
+      const query = String(args.query ?? "").toLowerCase()
+      const hits = Object.entries(KNOWLEDGE_BASE)
+        .filter(([key]) => query.toLowerCase().includes(key))
+        .map(([, article]) => article);
+      return { articles: hits.length ? hits : ["No exact match — use your judgment."] };
+    }
+    case "classifyItem": {
+      return {
+        ok: true, draftId: `draft-${args.itemId}`
+      }
+    }
+    case "draftReply": {
+      return {
+        ok: true, draftId: `draft-${args.itemId}`
+      }
+    }
+    case "sendReply": {
+      return {
+        sent: true, itemId: args.itemId, draftId: args.draftId
+      }
+    }
+    default: {
+      throw new Error(`You requested a tool that does not exist ${name}`)
+    }
+  }
+}
