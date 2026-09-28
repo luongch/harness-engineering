@@ -6,9 +6,17 @@ import { emit } from "./bus";
 import { model } from "./model";
 import { tools, runTool } from "./tools";
 import { SYSTEM_PROMPT } from "./system-prompt";
+import {buildContext,
+  summarize,
+  estimateTokens,
+  MAX_CONTEXT_TOKENS,
+  KEEP_CONTEXT_TOKENS,
+} from "./memory"
+import type { Mode } from "fs";
+import { sum } from "drizzle-orm";
 
 // A safety cap so a confused model can't loop forever.
-const MAX_STEPS = 10;
+const MAX_STEPS = 30;
 
 type ToolCall = { toolCallId: string; toolName: string; input: Record<string, unknown> };
 type Turn = { text: string; toolCalls: ToolCall[]; responseMessages: ModelMessage[] };
@@ -81,17 +89,64 @@ async function agentWorkflow(input: string): Promise<string> {
     { name: "started" },
   );
 
-  const messages: ModelMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: input },
-  ];
+  // const messages: ModelMessage[] = [
+  //   { role: "system", content: SYSTEM_PROMPT },
+  //   { role: "user", content: input },
+  // ];
+
+  //before the while loop we want to keep track of the turns and the summaries so far
+  let turns: ModelMessage[][] = []
+  let summary: string = ''
+
+
 
   let step = 0;
   while (step < MAX_STEPS) {
-    const turn = await DBOS.runStep(() => modelTurn(workflowId, messages), {
+    //we want to summarize before the turn because it's possible for it to run out of context in the middle of the turn
+    if(estimateTokens(turns.flat()) > MAX_CONTEXT_TOKENS) {
+      const old: ModelMessage[][] = []//current model history
+      while (turns.length > 1 && estimateTokens(turns.flat()) > KEEP_CONTEXT_TOKENS) {
+        //doing a sliding window here
+        const oldest = turns.shift()
+        if(oldest) {
+          old.push(oldest)
+        }
+      }
+
+      if(old.length > 0) {
+        summary = await DBOS.runStep(() => summarize(old, summary), {name: `summarize:${step}`})
+        const contextTokens = estimateTokens(buildContext(input, summary, turns))
+        //let the user know their stuff just got summarized
+        await DBOS.runStep(() => emit({
+          type: EventType.MemoryCompacted,
+          workflowId,
+          summarizedTurns: old.length,
+          contextTokens,
+          summary
+        }), {name: `compacted-${step}`})
+      }
+
+    }
+
+    //run 1 turn over it
+    //gives our new context
+    const context = buildContext(input, summary, turns)
+
+    const turn = await DBOS.runStep(() => modelTurn(workflowId, context), {
       name: `model-${step}`,
     });
-    messages.push(...turn.responseMessages);
+
+    const turnMessages: ModelMessage[] = [...turn.responseMessages]
+
+    // //original
+    // const turn = await DBOS.runStep(() => modelTurn(workflowId, messages), {
+    //   name: `model-${step}`,
+    // });
+
+    // //old code
+    // messages.push(...turn.responseMessages);
+
+
 
     if (turn.toolCalls.length === 0) {
       await DBOS.runStep(
@@ -110,7 +165,7 @@ async function agentWorkflow(input: string): Promise<string> {
         name: `tool-${call.toolCallId}`,
       });
       // Feed the tool result back to the model on the next turn.
-      messages.push({
+      turnMessages.push({
         role: "tool",
         content: [
           {
@@ -122,7 +177,7 @@ async function agentWorkflow(input: string): Promise<string> {
         ],
       });
     }
-
+    turns.push(turnMessages)
     step++;
   }
 
