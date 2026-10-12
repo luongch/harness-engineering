@@ -28,12 +28,13 @@ export function estimateTokens(messages: ModelMessage[]): number {
 // buildContext hydrates the context: the system prompt, the pinned task, the
 // summary of old work, and only the most recent turns verbatim.
 export function buildContext(
+  systemPrompt: string,
   task: string,
   summary: string,
   turns: ModelMessage[][],
 ): ModelMessage[] {
   const context: ModelMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: systemPrompt },
     { role: "user", content: task }, // the goal is pinned, never summarized away
   ];
   if (summary) {

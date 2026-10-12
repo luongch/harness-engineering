@@ -75,6 +75,22 @@ export const tools = {
     description: "Send the drafted reply to the customer. This really emails them.",
     inputSchema: z.object({ itemId: z.string(), draftId: z.string() }),
   }),
+  issueRefund: tool({
+    description: 'Issue a refund to the customer. IRREVERSIBLE -- this moves real money.',
+    inputSchema: z.object({
+      customerId: z.string(),
+      chargeId: z.string(),
+      amountCents: z.number()
+    })
+  }),
+
+  handoff: tool({
+    description: '',
+    inputSchema: z.object({
+      to: z.enum(["billing"]),
+      reason: z.string()
+    }),
+  })
 };
 
 // ── The harness-owned executor ──────────────────────────────────────────────
@@ -98,6 +114,15 @@ export async function runTool(
       return { ok: true, draftId: `draft-${args.itemId}` };
     case "sendReply":
       return { sent: true, itemId: args.itemId, draftId: args.draftId };
+    case "issueRefund":
+      return { 
+        refunded: true, 
+        customerId: args.customerId,
+        chargeId: args.chargeId,
+        amountCents: args.amountCents
+      };
+    // case "handoff": //I added this myself but we shouldn't be handling the handoff here, so this is wrong
+    //   return { sent: true, to: args.to, reason: args.reason };
     default:
       throw new Error(`unknown tool: ${name}`);
   }
