@@ -9,6 +9,7 @@ import { ensureSchema, clearEventLog } from "../harness/db";
 import { subscribe, history } from "../harness/bus";
 import { runAgentWorkflow } from "../harness/runtime";
 import type { ClientMessage } from "@shared/events";
+import { runSupervisorWorkflow } from "harness/supervisor";
 
 const PORT = Number(process.env.PORT ?? 8787);
 
@@ -57,7 +58,10 @@ async function main() {
       }
 
       if (message.type === "submit_task") {
-        await DBOS.startWorkflow(runAgentWorkflow)(message.input);
+        //we want to check first if it's supervised otherwise do the regular agent workflow
+        console.log("message.mode is", message.mode)
+        const workflow = message.mode === "supervised" ? runSupervisorWorkflow : runAgentWorkflow
+        await DBOS.startWorkflow(workflow)(message.input);
       }
     });
 
