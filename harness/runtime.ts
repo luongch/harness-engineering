@@ -16,6 +16,10 @@ import {
 
 const MAX_STEPS = 30;
 
+// tools the require a human's go-ahead before they run. (just the irreversible one for now -- the billing agent's refund)
+const NEEDS_APPROVAL = new Set(["issueRefund"])
+const APPROVAL_TIME_S = 86_400; 
+
 type ToolCall = { toolCallId: string; toolName: string; input: Record<string, unknown> };
 type Turn = { text: string; toolCalls: ToolCall[]; responseMessages: ModelMessage[] };
 
@@ -152,8 +156,60 @@ async function agentWorkflow(input: string): Promise<string> {
           { name: `handoff-${call.toolCallId}` },
         );
         currentAgent = agents[to] ?? currentAgent;
-        turnMessages.push(toolResultMessage(call, { ok: true, handedOffTo: to }));
-      } else {
+        // turnMessages.push(toolResultMessage(call, { ok: true, handedOffTo: to })); //original code
+        turnMessages.push(
+          toolResultMessage(call, {
+            ok: true,
+            message: `You are now the ${to} specialist. Take over and FINISH the task by calling the tools you need - do the work,
+            don't just acknowledge the hand off`
+          })
+        );
+      } else if (NEEDS_APPROVAL.has(call.toolName)) {
+        //HUMAN-IN-THE-LOOP
+        //ask, then SUSPEND the (durable) workflow until a human decides.
+        //recv() can wait minutes or days and because the workflow is durable, the process can crash and reume right here
+        await DBOS.runStep(
+          () => emit({
+            type: EventType.ApprovalRequested,
+            workflowId,
+            toolCallId: call.toolCallId,
+            action: call.toolName,
+            args: call.input
+          }),
+          { name: `approval-req-${call.toolCallId}`}
+        )
+
+        const decision = await DBOS.recv<{approved: boolean}>("approval", APPROVAL_TIME_S)
+        const approved = decision?.approved ?? false
+
+        await DBOS.runStep(
+          () => emit({
+            type: EventType.ApprovalResolved,
+            workflowId,
+            toolCallId: call.toolCallId,
+            approved
+          }),
+          {name: `approval-res-${call.toolCallId}`}
+        )
+
+        if(approved) {
+          const output = await DBOS.runStep(
+            () => toolStep(workflowId, call),
+            {name: `tool-${call.toolCallId}`}
+          );
+          turnMessages.push(toolResultMessage(call, output as JSONValue));
+        }
+        else {
+          turnMessages.push(
+            toolResultMessage(call, {
+              approved:false,
+              message:
+              "A human did NOT approve this action. Do not retry -- tell the customer it needs manual review"
+            })
+          )
+        }
+      }
+      else {
         const output = await DBOS.runStep(() => toolStep(workflowId, call), {
           name: `tool-${call.toolCallId}`,
         });

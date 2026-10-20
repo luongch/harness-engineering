@@ -23,8 +23,15 @@ async function main() {
   await DBOS.launch();
 
   const app = express();
-  app.use((_req, res, next) => {
+  // app.use((_req, res, next) => { //old code
+  app.use(express.json());
+  app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*"); // inspector runs on a different port
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type")
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+    if(req.method === "OPTIONS") {
+      return res.sendStatus(200)
+    }
     next();
   });
   app.get("/health", (_req, res) => res.json({ ok: true }));
@@ -34,6 +41,14 @@ async function main() {
     await clearEventLog();
     res.json({ ok: true });
   });
+
+  //Human-in-the-loop: deliver an approval decision to a suspended workflow.
+  //DBOS.send wakes its recv() -- even later, even after a restart.
+  app.post("/api/approve/:workflowId", async (req, res) => {
+    const approved = Boolean(req.body?.approved);
+    await DBOS.send(req.params.workflowId, { approved }, "approval")
+    res.json({ok: true})
+  })
 
   const server = createServer(app);
   const wss = new WebSocketServer({ server, path: "/ws" });
